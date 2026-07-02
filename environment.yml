@@ -1,0 +1,12 @@
+name: dge
+channels:
+  - conda-forge
+dependencies:
+  - requests
+  - numpy
+  - pandas
+  - python=3.11
+  - bioconductor-deseq2
+  - matplotlib
+  - bioconductor-clusterprofiler
+  - bioconductor-org.hs.eg.db
