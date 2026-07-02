@@ -1,47 +1,65 @@
-# HSC vs MSC Bulk RNA-seq Diferansiyel İfade Analizi
+# Bulk RNA-seq Diferansiyel Gen İfadesi ve Zenginleştirme Analizi Pipeline'ı
 
-Bu proje, hematopoietik kök hücreler (HSC) ve mezenkimal kök hücreler (MSC)
-arasındaki gen ifade farklılıklarını bulk RNA-seq verisi üzerinden analiz
-etmeyi amaçlar.
+GEO'dan indirilen bulk RNA-seq ham count verisi üzerinde DESeq2 ile
+diferansiyel gen ifadesi analizi yapan ve sonuçları clusterProfiler ile
+GO/KEGG zenginleştirme analiziyle yorumlayan, uçtan uca tekrar
+üretilebilir bir pipeline.
 
-## Amaç
+## Veri
 
-- Ham okuma sayılarından (raw counts) diferansiyel ifade analizi yapmak
-- HSC ve MSC grupları arasında anlamlı farklılık gösteren genleri belirlemek
-- Sonuçları fonksiyonel zenginleştirme (GO/KEGG) analizi ile yorumlamak
+Depodaki örnek çalıştırma **GSE52778** (insan havayolu düz kas hücreleri,
+dexamethasone tedavisi) verisiyle yapılmıştır. Bu veri seti belirli bir
+biyolojik hipotez için değil, pipeline'ın baştan sona doğru çalıştığını
+göstermek için seçilmiştir: NCBI'nin GEO üzerinde her seri için ürettiği
+standart ham count matrisine sahiptir ve iyi bilinen, temiz bir deney
+tasarımı (tedavi vs kontrol) içerir.
 
-## Klasör Yapısı
+Pipeline parametriktir; `scripts/01_download.py` bir `--gse` argümanı
+alır ve herhangi bir GEO serisine yönlendirilebilir (script, o seri için
+NCBI'nin ürettiği ham count matrisini otomatik olarak arar).
 
-```
-data/raw/         # Ham veri (git'e girmez)
-data/processed/   # İşlenmiş/temizlenmiş veri (git'e girmez)
-scripts/          # Sıralı çalışan analiz betikleri (01 -> 02 -> 03 -> 04)
-results/          # Analiz çıktıları, grafikler, tablolar (git'e girmez)
-notebooks/         # Keşifsel analiz not defterleri
-```
+## Pipeline Adımları
 
-## Ortam Kurulumu
+| Adım | Script | Ne yapar |
+|---|---|---|
+| 01 | `scripts/01_download.py` | GEO'dan NCBI'nin ürettiği ham count matrisini ve örnek (sample) metadata'sını indirir, `data/processed/sample_metadata.csv`'yi üretir |
+| 02 | `scripts/02_deseq2.R` | DESeq2 ile diferansiyel gen ifadesi analizini çalıştırır, sonuçları `results/deseq2_results.csv`'ye yazar |
+| 03 | `scripts/03_filter_summary.py` | anlamlılık eşiklerine göre genleri filtreler, volkan ve MA grafiklerini üretir |
+| 04 | `scripts/04_enrichment.R` | clusterProfiler ile GO (Biological Process) ve KEGG yolak zenginleştirme analizini yapar |
+
+Her adım bir öncekinin çıktısını girdi olarak alır; ara ve nihai çıktılar
+`results/` altına yazılır.
+
+## Kullanılan Araçlar
+
+- Python 3.11 (pandas, numpy, requests)
+- R (DESeq2, clusterProfiler, org.Hs.eg.db)
+- conda (`environment.yml` ile ortam yönetimi)
+
+## Kurulum ve Çalıştırma
 
 ```bash
 conda env create -f environment.yml
 conda activate dge
+
+conda run -n dge python scripts/01_download.py
+conda run -n dge Rscript scripts/02_deseq2.R
+conda run -n dge python scripts/03_filter_summary.py
+conda run -n dge Rscript scripts/04_enrichment.R
 ```
 
-## Pipeline
+## Örnek Sonuçlar (GSE52778: dexamethasone vs untreated)
 
-Analiz betikleri `scripts/` altında numaralandırılmış sırayla çalıştırılır,
-her biri bir öncekinin çıktısını girdi olarak alır:
+- Ön-filtreden sonra **21.833 gen** test edildi
+- Anlamlılık eşiği (padj < 0.05 ve |log2FC| > 1) ile **1.157 anlamlı gen**:
+  584 yukarı, 573 aşağı regüle
+- GO (Biological Process) zenginleştirmesinde **588 anlamlı terim**
+  (qvalue < 0.05)
+- KEGG yolak zenginleştirmesinde **17 anlamlı yolak** (qvalue < 0.05)
 
-- `01_download.py`: GEO'dan ham count matrisini ve örnek metadata'sını indirir
-  (`data/raw/`), örnek metadata'sını temizleyip `data/processed/` altına yazar
-- `02_deseq2.R`: DESeq2 ile diferansiyel gen ifadesi analizi yapar
-- `03_filter_summary.py`: sonuçları anlamlılık eşiklerine göre süzer, volkan
-  ve MA grafiklerini üretir
-- `04_enrichment.R`: clusterProfiler ile GO (Biological Process) ve KEGG
-  yolak zenginleştirme analizi yapar
+## Not
 
-Tüm çıktılar (tablolar, grafikler) `results/` altına yazılır.
-
-## Durum
-
-Uçtan uca pipeline (01 → 04) çalışır durumda.
+Bu projedeki metodolojik kararlar (analiz tasarımı, veri/GEO serisi
+seçimi, kovaryat ve kontrast tanımları, filtreleme eşikleri) tarafımca
+alınmıştır. Kodlama aşamasında yapay zeka destekli bir asistandan
+yararlanılmıştır.
