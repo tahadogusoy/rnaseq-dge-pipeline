@@ -52,9 +52,19 @@ if (!file.exists(metadata_file)) {
 cat("Ham count dosyası:", count_file, "\n")
 counts <- read.delim(gzfile(count_file), row.names = 1, check.names = FALSE)
 counts <- as.matrix(counts)
-# 01_download.py bu matrisin tam sayı olduğunu zaten doğruladı; burada
-# R tarafında da tipi integer'a çeviriyoruz çünkü DESeq2 negatif binom
-# modeli integer count bekler.
+# 01_download.py'nin doğrulaması sadece uyarı verir, akışı durdurmaz; bu
+# yüzden burada tam matris üzerinde bağımsız bir kontrol yapıyoruz. Amaç,
+# yanlışlıkla normalize/TPM bir dosyanın (ondalıklı değerler) sessizce
+# integer'a yuvarlanıp DESeq2'ye geçersiz veri olarak girmesini engellemek;
+# DESeq2'nin negatif binom modeli gerçek (tam sayı) count bekler.
+if (!isTRUE(all.equal(counts, round(counts)))) {
+  stop(
+    "Count matrisinde tam sayı olmayan (ondalıklı) değerler bulundu (",
+    count_file, "). Bu, ham count yerine normalize edilmiş/TPM bir ",
+    "dosyanın verildiğine işaret edebilir. DESeq2 negatif binom modeli ",
+    "tam sayı ham count bekler; lütfen 01_download.py çıktısını kontrol edin."
+  )
+}
 storage.mode(counts) <- "integer"
 
 metadata <- read.csv(metadata_file, stringsAsFactors = FALSE)
@@ -125,11 +135,50 @@ dds <- dds[keep, ]
 
 dds <- DESeq(dds)
 
+# Cook's mesafesi (varsayılan davranış, elle değiştirilmiyor): DESeq2
+# aykırı örneklerden etkilenen genlerin padj'ını otomatik olarak NA
+# yapar. Bu davranış az tekrarlı (n<=3/grup) tasarımlarda güvenilmez
+# olabilir; burada her koşulda (Untreated / Dexamethasone) 4 örnek var
+# (4 hücre hattından eşleştirilmiş), yani varsayılan cooksCutoff
+# davranışı için DESeq2'nin beklediği asgari tekrar sayısı sağlanıyor.
+# Bu yüzden cooksCutoff'u kapatmıyoruz; olası aykırı değerlerin NA'ya
+# çevrilmesi tercih ediliyor (aşağıdaki summary() çıktısında "outliers"
+# satırından görülebilir), sessizce göz ardı edilmiyor.
+
 # contrast'ı açıkça belirtiyoruz: design'ın son terimi 'condition' olsa
 # da results()'ın varsayılan yönü hangi seviyenin referans olduğuna
 # bağlıdır; burada niyeti (dexamethasone / untreated) koddan okunur
-# kılmak için elle yazıyoruz.
-res <- results(dds, contrast = c("condition", "Dexamethasone", "Untreated"))
+# kılmak için elle yazıyoruz. alpha=0.05: results()'ın bağımsız
+# filtreleme adımı, verilen alpha hedefine göre optimize edilir
+# (padj'ı NA yapılacak düşük-count eşiğini bu hedefe göre seçer);
+# 03_filter_summary.py'deki PADJ_THRESHOLD = 0.05 ile aynı değeri
+# vermezsek filtreleme yanlış eşik için optimize edilmiş, downstream'de
+# kullanılan eşikle tutarsız (ve güç kaybına yol açabilecek) bir sonuç
+# üretir.
+res <- results(
+  dds,
+  contrast = c("condition", "Dexamethasone", "Untreated"),
+  alpha = 0.05
+)
+
+# lfcShrink (apeglm): düşük count'lu / yüksek varyanslı genlerde ham
+# (MLE) log2FoldChange tahminleri gürültülü ve şişirilmiş olabilir.
+# apeglm bu tahminleri Bayesian shrinkage ile küçük/güvenilmez etkileri
+# sıfıra doğru çekerek daha güvenilir bir etki büyüklüğü sıralaması
+# sağlar (Zhu, Ibrahim & Love 2018). Shrinkage test istatistiğini
+# (pvalue/padj) DEĞİŞTİRMEZ, sadece log2FoldChange ve lfcSE tahminini
+# düzeltir; bu yüzden `res` nesnesini veriyoruz ki pvalue/padj (ve
+# yukarıdaki alpha=0.05 ile optimize edilmiş bağımsız filtreleme
+# sonucu) korunsun. 03'teki |log2FC|>1 eşiği ve 04'teki MA/volkan
+# grafikleri bu şekilde düzeltilmiş tahmin üzerinden çalışır.
+coef_name <- "condition_Dexamethasone_vs_Untreated"
+if (!(coef_name %in% resultsNames(dds))) {
+  stop(
+    "Beklenen katsayı adı resultsNames(dds) içinde bulunamadı: ", coef_name,
+    ". Mevcut katsayılar: ", paste(resultsNames(dds), collapse = ", ")
+  )
+}
+res <- lfcShrink(dds, coef = coef_name, type = "apeglm", res = res)
 res_ordered <- res[order(res$padj), ]
 
 dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
